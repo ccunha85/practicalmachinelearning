@@ -1,0 +1,235 @@
+---
+title: "Practical Machine Learning Project"
+author: "Cris Cunha"
+date: "10 June 2017"
+output: html_document
+---
+
+## Introduction
+
+### Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. In this project, we use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). The goal of this project is to predict the manner in which they did the exercise. This is codified by the "classe" variable contained in the training set. 
+
+### Approach
+
+In this project, we developed 2 machine learning models to select the most appropriate classifier to predict the effectiveness of the exercise. These were classification trees and random forest. Model selection was performed based on accuracy in the validation set. From there, the model selected was applied in the testing set to predict the outcomes of the results of the exercises.
+
+## Model selection
+
+In this section we apply the two classifiers to the training set to identify their prediction accuracies and select the best model to be used subsequently in the testing set.
+
+### Setting up the data
+
+Firstly, let's load the required packages to develop the models
+
+```{r, echo=FALSE}
+library(caret)
+library(ggplot2)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(parallel)
+library(doParallel)
+```
+
+Secondly, we will download the training and testing sets
+
+```{r}
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",destfile="training.csv")
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",destfile="testing.csv")
+```
+
+We will store the training and test sets into the variables "training" and "testing"
+
+```{r}
+training<-read.csv(("training.csv"),na.strings=c("NA","#DIV/0!",""))
+testing<-read.csv(("testing.csv"),na.strings=c("NA","#DIV/0!",""))
+```
+
+### Data exploration
+
+We will first explore the training set to understand the configuration of the data set received
+
+```{r}
+dim(training)
+```
+We can see that the training set has 19622 observations accross 160 variables. Next, we will identify what are these variables and their class.
+
+```{r}
+str(training)
+```
+Two key insights are derived from the data: a) there are several variables that present NA results. b) Columns 1 to 7 are related to timestamps and will not affect the outputs of our classifier. 
+
+To cross check the testing set, we apply the same exploration.
+
+```{r}
+dim(testing)
+```
+As expected, the training set contain the same 160 variables, however with only 20 observations
+
+```{r}
+str(testing)
+```
+
+The same insights apply to the training set, indicating we can perform a data cleaning step in both sets.
+
+### Data cleaning
+
+Firstly we will remove the variables that present NA observations from both the training and the testing set.
+
+```{r}
+training<-training[,colSums(is.na(training))==0]
+testing<-testing[,colSums(is.na(testing))==0]
+```
+
+Secondly, let's exclude the 7 first columns that will not add to the relative information gain for our models from both the training and testing sets.
+
+```{r}
+training<-training[,-c(1:7)]
+testing<-testing[,-c(1:7)]
+```
+
+We can now see the results of the data cleaning step.
+
+```{r}
+dim(training)
+```
+The training set now has maintained the same number of observations however variables have been reduced from 160 to 53.
+```{r}
+dim(testing)
+```
+The same applies to the testing set
+
+### Data preparation
+
+We will first put the testing set aside and use cross-validation in the training set to develop our models.
+
+```{r}
+inTrain<-createDataPartition(training$classe,p=0.7,list=FALSE)
+
+training2<-training[inTrain,]
+dim(training2)
+```
+The new training set, called "training 2" has 13737 observations accross the 53 variables of the data set.
+
+```{r}
+validation<-training[-inTrain,]
+dim(validation)
+```
+The validation set, called "validation" has 5885 observations accross 53 variables.
+
+We will now plot the frequency of each classe variable factor to understand if we have an adequate distribution in the new training set so we don't face bias problems whilst developing the models.
+
+```{r}
+plot(training2$classe,xlab="classe",ylab="frequency",main="Classe frequency")
+```
+
+We can see that the factors for the classe variable are well distributed within the same order of magnitude, showing that the training set created is adequate for the model development
+
+### Features discovery and selection
+
+Firstly, let's set a seed for reproducibility of the results
+
+```{r}
+set.seed(32224)
+```
+
+#### Classification tree
+
+The first model will be developed using a classification tree over the training2 set.
+
+```{r}
+modFit<-train(classe~.,method="rpart",data=training2)
+modFit$finalModel
+```
+To understand the outcomes of the classification tree, the following plot is performed.
+
+```{r}
+fancyRpartPlot(modFit$finalModel)
+```
+We can see through the plot that there is a defined pathway for each leaf to each classe variable factor. Let's now identify the accuracy of this model when predicting on the validation set.
+
+```{r}
+pred<-predict(modFit,validation)
+confusionMatrix(pred,validation$classe)
+```
+As seen from the confusion matrix above, there seems to be a low level of accuracy from the model to predict on the validation se. Let's extract the accuracy of the classification tree model
+```{r}
+confusionMatrix(pred,validation$classe)$overall[[1]]
+```
+The model presented an accuracy of 50%, which shows that there is room to improve using a different approach. 
+```{r}
+plot(modFit)
+```
+We can see that the model accuracy reduces sharply as the complexity parameter increases for the bootstrapping resampling used by the classification tree algorithm. This indicates that a model such as random forest, in which uses a stacked majority vote of a number of classification trees might be a good candidate to improve accuracy.
+
+#### Random forest
+
+First, let's train the training2 data set using a random forest algorithm. Given the computational power required we will allow parallel processing by creating a core cluster to run the model.
+
+```{r}
+modControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+```
+
+```{r}
+cluster <- makeCluster(detectCores()- 1)
+registerDoParallel(cluster)
+```
+
+Let's now train the model
+
+```{r}
+modFit1<-train(classe~.,method="rf",data=training2, trainControl=modControl)
+```
+
+With the model trained, we can stop parallel processing.
+
+```{r}
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+The results of the model are shown below.
+
+```{r}
+modFit1$finalModel
+```
+As it is noted, the confusion matrix shows a much more accurate modelling of the factors in the variable classe. Given the high computational cost of running the random forest algorithm we will save the model and load it as required for future use.
+```{r}
+save(modFit1,file="modFit1.RData")
+```
+
+```{r}
+load("modFit1.RData")
+```
+
+Let's now use the model to predict on the validation set and identify its performance
+
+```{r}
+pred1<-predict(modFit1,validation)
+confusionMatrix(pred1,validation$classe)
+```
+The random forest algorithm performed much better, showing high levels of sensitivity and specificity for all classes in the target variable. The accuracy of the model is:
+```{r}
+confusionMatrix(pred1,validation$classe)$overall[[1]]
+```
+This is a superb improvement from the classification tree algorithm used.
+
+```{r}
+plot(modFit1)
+```
+
+The bootstrap accuracy curve shows that with approx 27 random selected predictors provides the better performance for the random forest model. Accuracy starts dropping past this value.
+
+
+## Testing the model
+
+With the random forest model developed, let's apply to the testing set and see the results
+```{r}
+predF<-predict(modFit1,testing)
+print(predF)
+```
+The 20 results above are the classe predictions against each one of the 20 observations of the testing set.
